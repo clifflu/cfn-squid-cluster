@@ -74,7 +74,7 @@ Resources:
       Cooldown: "300"
       DesiredCapacity: !Ref ClusterSize
       HealthCheckGracePeriod: "180"
-      HealthCheckType: EC2
+      HealthCheckType: ELB
       LaunchConfigurationName: !Ref ClusterLc
       MaxSize: "10"
       MetricsCollection:
@@ -117,7 +117,9 @@ Resources:
               - "unzip ./foreign-config.zip && "
               - "rm -f ./foreign-config.zip && "
               - "rm -f /etc/squid/squid.conf && "
-              - "ln -s /usr/local/squid/etc/squid.conf /etc/squid/"
+              - "ln -s /usr/local/squid/etc/squid.conf /etc/squid/\n"
+              - "chkconfig squid on\n"
+              - "service squid start\n"
 
   ClusterSg:
     Type: "AWS::EC2::SecurityGroup"
@@ -159,8 +161,6 @@ Resources:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       HealthCheckIntervalSeconds: 30
-      # HealthCheckPort: 3128
-      # HealthCheckProtocol: TCP
       HealthCheckTimeoutSeconds: 10
       HealthyThresholdCount: 2
       Port: 3128
