@@ -1,0 +1,131 @@
+Description: >
+  Create highly available Squid cluster
+Parameters:
+  SquidConfig:
+    Type: String
+    Description: S3 URL to zipped config deployed to /usr/local/squid/etc/
+    AllowedPattern: ^s3://.+/.+\.zip$
+  LoadBalancerSg:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for ALB controlling access to the cluster
+  ClusterSize:
+    Type: Number
+    Default: 1
+    Description: Number of instances to the cluster
+  ClusterInstanceType:
+    Type: String
+    Default: t2.medium
+    Description: Cluster instance type, only m*, r*, c*, and t* instances allowed
+    AllowedPattern: ^(m|r|c|t)\d\.(nano|medium|large|\d*xlarge)$
+  ClusterRootDiskSize:
+    Type: Number
+    Default: 12
+    MinValue: 8
+    MaxValue: 1024
+    Description: Size of root disk in GB
+  ClusterInstanceProfileArn:
+    Type: String
+    Description: ARN to Instance Profile for Squid cluster
+  ClusterVpc:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Squid and LB
+  ClusterSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for Squid and LB
+
+Mappings:
+  AwsLinuxImageId:
+    ap-south-1:
+      Ec2Hvm64: ami-4fc58420
+    eu-west-2:
+      Ec2Hvm64: ami-1a7f6d7e
+    eu-west-1:
+      Ec2Hvm64: ami-acd005d5
+    ap-northeast-2:
+      Ec2Hvm64: ami-9bec36f5
+    ap-northeast-1:
+      Ec2Hvm64: ami-2a69be4c
+    sa-east-1:
+      Ec2Hvm64: ami-f1344b9d
+    ca-central-1:
+      Ec2Hvm64: ami-fd55ec99
+    ap-southeast-1:
+      Ec2Hvm64: ami-0797ea64
+    ap-southeast-2:
+      Ec2Hvm64: ami-8536d6e7
+    eu-central-1:
+      Ec2Hvm64: ami-c7ee5ca8
+    us-east-1:
+      Ec2Hvm64: ami-8c1be5f6
+    us-east-2:
+      Ec2Hvm64: ami-c5062ba0
+    us-west-1:
+      Ec2Hvm64: ami-02eada62
+    us-west-2:
+      Ec2Hvm64: ami-e689729e
+
+Resources:
+  ClusterAsg:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      Cooldown: "300"
+      DesiredCapacity: !Ref ClusterSize
+      HealthCheckGracePeriod: "180"
+      HealthCheckType: EC2
+      LaunchConfigurationName: !Ref ClusterLc
+      MaxSize: "10"
+      MetricsCollection:
+        - Granularity: 1Minute
+      MinSize: "0"
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+          PropagateAtLaunch: true
+      # TargetGroupARNs:
+      #   - String
+      VPCZoneIdentifier: !Ref ClusterSubnets
+
+  ClusterLc:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      BlockDeviceMappings:
+        - DeviceName: "/dev/xvda"
+          Ebs:
+            VolumeSize: !Ref ClusterRootDiskSize
+            VolumeType: gp2
+      IamInstanceProfile: !Ref ClusterInstanceProfileArn
+      ImageId: !FindInMap
+        - AwsLinuxImageId
+        - !Ref AWS::Region
+        - Ec2Hvm64
+      InstanceType: !Ref ClusterInstanceType
+      SecurityGroups:
+        - !Ref ClusterSg
+      UserData:
+        Fn::Base64:
+          Fn::Join:
+            - ""
+            - - "#!/bin/bash\n"
+              - "yum install -y squid34 || yum install -y squid\n"
+              - "mkdir -p /usr/local/squid/etc/ && cd /usr/local/squid/etc/ && "
+              - "aws s3 cp \""
+              - !Ref SquidConfig
+              - "\" ./foreign-config.zip && "
+              - "unzip ./foreign-config.zip && "
+              - "rm -f ./foreign-config.zip && "
+              - "rm -f /etc/squid/squid.conf && "
+              - "ln -s /usr/local/squid/etc/squid.conf /etc/squid/"
+
+  ClusterSg:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Squid cluster
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref LoadBalancerSg
+          IpProtocol: tcp
+          FromPort: 3128
+          ToPort: 3128
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      VpcId: !Ref ClusterVpc
