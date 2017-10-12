@@ -5,9 +5,10 @@ Parameters:
     Type: String
     Description: S3 URL to zipped config deployed to /usr/local/squid/etc/
     AllowedPattern: ^s3://.+/.+\.zip$
-  LoadBalancerSg:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group for ALB controlling access to the cluster
+  HealthCheckCidr:
+    Type: String
+    Description: CIDR for LB ENI to be whitelisted in CLusterSg enabling health checks
+    AllowedPattern: ^(\d+\.){3}\d+/\d+$
   ClusterSize:
     Type: Number
     Default: 1
@@ -31,8 +32,10 @@ Parameters:
     Description: VPC for Squid and LB
   ClusterSubnets:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets for Squid and LB
-
+    Description: Subnets for Squid cluster, public recommended
+  LbSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for LB, usually private
 Mappings:
   AwsLinuxImageId:
     ap-south-1:
@@ -81,8 +84,8 @@ Resources:
         - Key: Name
           Value: !Ref AWS::StackName
           PropagateAtLaunch: true
-      # TargetGroupARNs:
-      #   - String
+      TargetGroupARNs:
+         - !Ref LoadBalancerTargetGroup
       VPCZoneIdentifier: !Ref ClusterSubnets
 
   ClusterLc:
@@ -121,11 +124,49 @@ Resources:
     Properties:
       GroupDescription: Squid cluster
       SecurityGroupIngress:
-        - SourceSecurityGroupId: !Ref LoadBalancerSg
-          IpProtocol: tcp
+        - CidrIp: !Ref HealthCheckCidr
           FromPort: 3128
           ToPort: 3128
+          IpProtocol: TCP
       Tags:
         - Key: Name
           Value: !Ref AWS::StackName
+      VpcId: !Ref ClusterVpc
+
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets: !Ref LbSubnets
+      # SubnetMappings:
+      #   - String
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      Type: network
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref LoadBalancerTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 3128
+      Protocol: TCP
+
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      # HealthCheckPort: 3128
+      # HealthCheckProtocol: TCP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      Port: 3128
+      Protocol: TCP
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      UnhealthyThresholdCount: 2
       VpcId: !Ref ClusterVpc
