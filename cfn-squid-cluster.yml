@@ -112,7 +112,41 @@ Resources:
 
   ClusterLc:
     Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          core: [ squid ]
+          full: [ squid, firehose ]
+        squid:
+          commands:
+            config:
+              cwd: "~"
+              test: "test -d /usr/local/squid/etc"
+              command: rm -f /etc/squid/squid.conf && ln -s /usr/local/squid/etc/squid.conf /etc/squid/
+          packages:
+            yum:
+              squid: []
+          services:
+            sysvinit:
+              squid:
+                enabled: true
+                ensureRunning: true
+        firehose-agent:
+          packages:
+            yum:
+              aws-kinesis-agent: []
+          commands:
+            config:
+              cwd: "~"
+              test: "test -f /usr/local/aws-kinesis/agent.json"
+              command: rm -f /etc/aws-kinesis/agent.json && ln -s /usr/local/aws-kinesis/agent.json /etc/aws-kinesis/
+          services:
+            sysvinit:
+              aws-kinesis-agent:
+                enabled: true
+                ensureRunning: true
     Properties:
+      KeyName: clifflu@clMBPR15_20170721
       BlockDeviceMappings:
         - DeviceName: "/dev/xvda"
           Ebs:
@@ -133,7 +167,6 @@ Resources:
             - "\n"
             - - "#!/bin/bash"
               - yum update -y
-              - yum install -y squid34 || yum install -y squid
               # Squid config, optional
               - Fn::If:
                 - EmptySquidConfig
@@ -141,29 +174,37 @@ Resources:
                 - Fn::Join:
                   - " && "
                   - - cd /tmp
-                    - mkdir -p /usr/local/squid/etc/ && cd /usr/local/squid/etc/
+                    - mkdir -p /usr/local/squid/etc && cd /usr/local/squid/etc
                     - !Join ["", [ "aws s3 cp \"", !Ref SquidConfig, "\" ./foreign-config.zip" ]]
                     - unzip ./foreign-config.zip
-                    # make sure squid fails if config file is missing
-                    - rm -f /etc/squid/squid.conf
                     - rm -f ./foreign-config.zip
-                    - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
-              - chkconfig squid on
               # Kinesis firehose agent, optional
               - Fn::If:
                 - EmptyKfaConfig
                 - ""
                 - Fn::Join:
-                  - "\n"
+                  - " && "
                   - - yum install -y aws-kinesis-agent
-                    - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
-                    - chkconfig aws-kinesis-agent on
-                    - service aws-kinesis-agent restart
+                    - mkdir -p /usr/local/aws-kinesis && cd /usr/local/aws-kinesis
+                    - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" ./agent.json" ]]
               - Fn::Join:
                 - " "
-                - - service squid start && cfn-init -s
+                - - /opt/aws/bin/cfn-init
+                  - --stack
                   - !Ref AWS::StackName
-                  - -r ClusterLc --region
+                  - --resource ClusterLc
+                  - --region
+                  - !Ref AWS::Region
+                  - -c
+                  - !If [ EmptyKfaConfig, core, full ]
+              - Fn::Join:
+                - " "
+                - - /opt/aws/bin/cfn-signal
+                  - -e $?
+                  - --stack
+                  - !Ref AWS::StackName
+                  - --resource ClusterAsg
+                  - --region
                   - !Ref AWS::Region
 
   ClusterSg:
@@ -217,6 +258,9 @@ Resources:
       HealthyThresholdCount: 2
       Port: 3128
       Protocol: TCP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
       Tags:
         - Key: Name
           Value: !Ref AWS::StackName
