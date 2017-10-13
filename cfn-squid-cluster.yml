@@ -133,20 +133,20 @@ Resources:
             - "\n"
             - - "#!/bin/bash"
               - yum update -y
-              - yum install -y squid34 || yum install -y squid
+              - yum install -y squid
               # Squid config, optional
               - Fn::If:
                 - EmptySquidConfig
                 - ""
                 - Fn::Join:
                   - " && "
-                  - - cd /tmp
-                    - mkdir -p /usr/local/squid/etc/ && cd /usr/local/squid/etc/
+                  - - mkdir -p /usr/local/squid/etc
+                    - cd /usr/local/squid/etc
                     - !Join ["", [ "aws s3 cp \"", !Ref SquidConfig, "\" ./foreign-config.zip" ]]
                     - unzip ./foreign-config.zip
                     # make sure squid fails if config file is missing
-                    - rm -f /etc/squid/squid.conf
                     - rm -f ./foreign-config.zip
+                    - rm -f /etc/squid/squid.conf
                     - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
               - chkconfig squid on
               # Kinesis firehose agent, optional
@@ -159,11 +159,15 @@ Resources:
                     - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
                     - chkconfig aws-kinesis-agent on
                     - service aws-kinesis-agent restart
+              - service squid restart
               - Fn::Join:
                 - " "
-                - - service squid start && cfn-init -s
+                - - cfn-signal
+                  - -s $?
+                  - --stack
                   - !Ref AWS::StackName
-                  - -r ClusterLc --region
+                  - --resource ClusterLc
+                  - --region
                   - !Ref AWS::Region
 
   ClusterSg:
@@ -217,6 +221,9 @@ Resources:
       HealthyThresholdCount: 2
       Port: 3128
       Protocol: TCP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 30
       Tags:
         - Key: Name
           Value: !Ref AWS::StackName
