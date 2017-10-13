@@ -103,6 +103,7 @@ Resources:
         - Ec2Hvm64
       InstanceType: !Ref ClusterInstanceType
       SecurityGroups:
+        - !Ref ClusterSg
         - !Ref HealthCheckSg
       UserData:
         Fn::Base64:
