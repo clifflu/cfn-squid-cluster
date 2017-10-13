@@ -3,19 +3,20 @@ Description: >
 Parameters:
   SquidConfig:
     Type: String
-    Description: S3 URL to squid config zip archive deployed to /usr/local/squid/etc/
-    AllowedPattern: ^s3://.+/.+\.zip$
+    Description: >
+      S3 URL to squid config zip archive deployed to /usr/local/squid/etc/.
+      Leave it blank for stock default.
+    AllowedPattern: (^s3://.+/.+\.zip$)|^$
   FirehoseAgentConfig:
     Type: String
-    Description: S3 URL to Kinesis firehose agent config. Leave empty to disable log collection
+    Description: >
+      S3 URL to Kinesis firehose agent config. Leave empty to disable log
+      collection.
     AllowedPattern: (^s3://.+/.+\.json$)|^$
   HealthCheckCidr:
     Type: String
-<<<<<<< HEAD
-    Description: CIDR for LB ENI to be whitelisted in HealthCheckSg enabling health checks
-=======
-    Description: CIDR for LB ENI to be whitelisted in ClusterSg enabling health checks
->>>>>>> feat: install firehose agent optionally
+    Description: >
+      CIDR for LB ENI to be whitelisted in HealthCheckSg enabling health checks
     AllowedPattern: ^(\d+\.){3}\d+/\d+$
   ClusterSize:
     Type: Number
@@ -78,6 +79,7 @@ Mappings:
 
 Conditions:
   # EmptyLbSubnets: !Equals ["", !Join ["", !Ref LbSubnets] ]
+  EmptySquidConfig: !Equals ["", !Ref SquidConfig]
   EmptyKfaConfig: !Equals ["", !Ref FirehoseAgentConfig]
 
 Resources:
@@ -100,6 +102,13 @@ Resources:
       TargetGroupARNs:
          - !Ref LoadBalancerTargetGroup
       VPCZoneIdentifier: !Ref ClusterSubnets
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MaxBatchSize: 1
+        MinInstancesInService: 1
+        PauseTime: PT10M
+        SuspendProcesses: [ HealthCheck, ReplaceUnhealthy, AZRebalance, AlarmNotification, ScheduledActions ]
+        WaitOnResourceSignals: true
 
   ClusterLc:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -123,18 +132,23 @@ Resources:
           Fn::Join:
             - "\n"
             - - "#!/bin/bash"
-              # squid
+              - yum update -y
               - yum install -y squid34 || yum install -y squid
-              - Fn::Join:
-                - " && "
-                - - mkdir -p /usr/local/squid/etc/ && cd /usr/local/squid/etc/
-                  - !Join ["", [ "aws s3 cp \"", !Ref SquidConfig, "\" ./foreign-config.zip" ]]
-                  - unzip ./foreign-config.zip
-                  - rm -f ./foreign-config.zip
-                  - rm -f /etc/squid/squid.conf
-                  - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
+              # Squid config, optional
+              - Fn::If:
+                - EmptySquidConfig
+                - ""
+                - Fn::Join:
+                  - " && "
+                  - - cd /tmp
+                    - mkdir -p /usr/local/squid/etc/ && cd /usr/local/squid/etc/
+                    - !Join ["", [ "aws s3 cp \"", !Ref SquidConfig, "\" ./foreign-config.zip" ]]
+                    - unzip ./foreign-config.zip
+                    # make sure squid fails if config file is missing
+                    - rm -f /etc/squid/squid.conf
+                    - rm -f ./foreign-config.zip
+                    - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
               - chkconfig squid on
-              - service squid start
               # Kinesis firehose agent, optional
               - Fn::If:
                 - EmptyKfaConfig
@@ -145,6 +159,12 @@ Resources:
                     - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
                     - chkconfig aws-kinesis-agent on
                     - service aws-kinesis-agent restart
+              - Fn::Join:
+                - " "
+                - - service squid start && cfn-init -s
+                  - !Ref AWS::StackName
+                  - -r ClusterLc --region
+                  - !Ref AWS::Region
 
   ClusterSg:
     Type: "AWS::EC2::SecurityGroup"
