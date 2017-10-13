@@ -6,9 +6,18 @@ AWS CloudFormation template to create highly available Squid cluster with AWS NL
 
 1. Zip squid configs in a zip archive, where `squid.conf` will be in the root directory unzipped.
 2. Upload zip archive to some S3 bucket
-3. Create an IAM Instance Profile and grant read access (`GetObject`) on beforementioned object to it
+3. Create an IAM Instance Profile and grant read access (`GetObject`) on aforementioned object to it
 4. Create an CloudFormation stack and fill in parameters
 5. Update ingress rules to control access to squid
+
+## Firehose agent
+
+Optionally, squid-cluster can upload logs to AWS Kinesis Firehose. It installs
+the agent only if this feature was enabled.
+
+## License
+
+MIT
 
 ## Note
 
