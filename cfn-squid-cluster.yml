@@ -7,7 +7,7 @@ Parameters:
     AllowedPattern: ^s3://.+/.+\.zip$
   HealthCheckCidr:
     Type: String
-    Description: CIDR for LB ENI to be whitelisted in CLusterSg enabling health checks
+    Description: CIDR for LB ENI to be whitelisted in HealthCheckSg enabling health checks
     AllowedPattern: ^(\d+\.){3}\d+/\d+$
   ClusterSize:
     Type: Number
@@ -103,7 +103,7 @@ Resources:
         - Ec2Hvm64
       InstanceType: !Ref ClusterInstanceType
       SecurityGroups:
-        - !Ref ClusterSg
+        - !Ref HealthCheckSg
       UserData:
         Fn::Base64:
           Fn::Join:
@@ -124,7 +124,16 @@ Resources:
   ClusterSg:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
-      GroupDescription: Squid cluster
+      GroupDescription: Squid cluster access control
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+      VpcId: !Ref ClusterVpc
+
+  HealthCheckSg:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: Squid cluster for NLB health check
       SecurityGroupIngress:
         - CidrIp: !Ref HealthCheckCidr
           FromPort: 3128
@@ -132,7 +141,7 @@ Resources:
           IpProtocol: TCP
       Tags:
         - Key: Name
-          Value: !Ref AWS::StackName
+          Value: !Join [ -, [ !Ref AWS::StackName, 'HealthCheck' ]]
       VpcId: !Ref ClusterVpc
 
   LoadBalancer:
