@@ -142,7 +142,7 @@ Resources:
           IpProtocol: TCP
       Tags:
         - Key: Name
-          Value: !Join [ -, [ !Ref AWS::StackName, 'HealthCheck' ]]
+          Value: !Join [ -, [ !Ref "AWS::StackName", HealthCheck ]]
       VpcId: !Ref ClusterVpc
 
   LoadBalancer:
