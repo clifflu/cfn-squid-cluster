@@ -105,7 +105,7 @@ Resources:
       AutoScalingRollingUpdate:
         MaxBatchSize: 1
         MinInstancesInService: 1
-        PauseTime: PT10M
+        PauseTime: PT5M
         SuspendProcesses: [ HealthCheck, ReplaceUnhealthy, AZRebalance, AlarmNotification, ScheduledActions ]
         WaitOnResourceSignals: true
 
