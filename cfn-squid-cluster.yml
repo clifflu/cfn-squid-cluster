@@ -111,24 +111,6 @@ Resources:
 
   ClusterLc:
     Type: AWS::AutoScaling::LaunchConfiguration
-    Metadata:
-      AWS::CloudFormation::Init:
-        configSets:
-          squid-kinesis:
-            - {ConfigSet: squid}
-            - aws-kinesis
-          squid:
-            - squid
-        squid:
-          services:
-            squid:
-              enabled: true
-              ensureRunning: true
-        aws-kinesis:
-          services:
-            aws-kinesis-agent:
-              enabled: true
-              ensureRunning: true
     Properties:
       BlockDeviceMappings:
         - DeviceName: "/dev/xvda"
@@ -151,6 +133,7 @@ Resources:
             - - "#!/bin/bash"
               - yum update -y
               - yum install -y squid
+              - chkconfig squid on
               # Squid config, optional
               - Fn::If:
                 - EmptySquidConfig
@@ -173,15 +156,9 @@ Resources:
                   - "\n"
                   - - yum install -y aws-kinesis-agent
                     - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
-              - Fn::Join:
-                - " "
-                - - /opt/aws/bin/cfn-init --resource ClusterLc
-                  - -c
-                  - !If [ EmptyKfaConfig, squid, squid-kinesis]
-                  - --stack
-                  - !Ref AWS::StackName
-                  - --region
-                  - !Ref AWS::Region
+                    - chkconfig aws-kinesis-agent on
+                    - service start aws-kinesis-agent
+              - service squid start
               - Fn::Join:
                 - " "
                 - - /opt/aws/bin/cfn-signal -e $? --resource ClusterAsg
@@ -189,6 +166,7 @@ Resources:
                   - !Ref AWS::StackName
                   - --region
                   - !Ref AWS::Region
+                  - "|| echo done"
 
   ClusterSg:
     Type: "AWS::EC2::SecurityGroup"
