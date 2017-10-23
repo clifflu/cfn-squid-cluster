@@ -1,18 +1,21 @@
 Description: >
   Create highly available Squid cluster
 Parameters:
-  SquidConfig:
+  ConfigBucket:
+    Type: String
+    Description: S3 bucket for configs (SquidConfig, FirehoseAgentConfig)
+  SquidConfigKey:
     Type: String
     Description: >
-      S3 URL to squid config zip archive deployed to /usr/local/squid/etc/.
-      Leave it blank for stock default.
-    AllowedPattern: (^s3://.+/.+\.zip$)|^$
-  FirehoseAgentConfig:
+      Key name to zip archive containing squid config to be extracted to
+      as /usr/local/squid/etc/. Leave blank for default values.
+    AllowedPattern: (^.+\.zip$)|^$
+  FirehoseAgentConfigKey:
     Type: String
     Description: >
-      S3 URL to Kinesis firehose agent config. Leave empty to disable log
+      Key name to Kinesis firehose agent config. Leave blank to disable log
       collection.
-    AllowedPattern: (^s3://.+/.+\.json$)|^$
+    AllowedPattern: (^.+\.json$)|^$
   HealthCheckCidr:
     Type: String
     Description: >
@@ -33,9 +36,9 @@ Parameters:
     MinValue: 8
     MaxValue: 1024
     Description: Size of root disk in GB
-  ClusterInstanceProfileArn:
+  ClusterRoleName:
     Type: String
-    Description: ARN to Instance Profile for Squid cluster
+    Description: Role name for Squid cluster, required if reading config from S3
   ClusterVpc:
     Type: AWS::EC2::VPC::Id
     Description: VPC for Squid and LB
@@ -79,8 +82,8 @@ Mappings:
 
 Conditions:
   # EmptyLbSubnets: !Equals ["", !Join ["", !Ref LbSubnets] ]
-  EmptySquidConfig: !Equals ["", !Ref SquidConfig]
-  EmptyKfaConfig: !Equals ["", !Ref FirehoseAgentConfig]
+  EmptySquidConfig: !Equals ["", !Ref SquidConfigKey]
+  EmptyKfaConfig: !Equals ["", !Ref FirehoseAgentConfigKey]
 
 Resources:
   ClusterAsg:
@@ -106,19 +109,94 @@ Resources:
       AutoScalingRollingUpdate:
         MaxBatchSize: 1
         MinInstancesInService: 1
-        PauseTime: PT10M
+        PauseTime: PT5M
         SuspendProcesses: [ HealthCheck, ReplaceUnhealthy, AZRebalance, AlarmNotification, ScheduledActions ]
         WaitOnResourceSignals: true
 
   ClusterLc:
     Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Authentication:
+        S3AccessCreds:
+          type: S3
+          buckets:
+            - !Ref ConfigBucket
+          roleName:
+            Fn::Join:
+              - ""
+              - - "arn:aws:iam::"
+                - !Ref AWS::AccountId
+                - ":role/"
+                - !Ref ClusterRoleName
+          buckets: !Ref ConfigBucket
+
+      AWS::CloudFormation::Init:
+        configSets:
+          squid-kinesis:
+            - ConfigSet: squid
+            - kinesis-agent
+          squid:
+            - squid
+          default:
+            - ConfigSet: squid
+        kinesis-agent:
+          packages: {yum: {aws-kinesis-agent: []}}
+          files:
+            /etc/aws-kinesis/agent.json:
+              mode: "000640"
+              source:
+                Fn::Join:
+                  - ""
+                  - - http://s3.amazonaws.com/
+                    - !Ref ConfigBucket
+                    - /
+                    - !Ref FirehoseAgentConfigKey
+              authentication: S3AccessCreds
+          services:
+            sysvinit:
+              aws-kinesis-agent:
+                enabled: true
+                ensureRunning: true
+                files: /etc/aws-kinesis/agent.json
+        squid:
+          packages: {yum: {squid: []}}
+          services:
+            sysvinit:
+              squid:
+                enabled: true
+                ensureRunning: true
+                files: /etc/squid/squid.conf
+          sources:
+            /usr/local/squid/etc/:
+              Fn::If:
+                - EmptySquidConfig
+                - !Ref AWS::NoValue
+                - Fn::Join:
+                    - ""
+                    - - http://s3.amazonaws.com/
+                      - !Ref ConfigBucket
+                      - /
+                      - !Ref SquidConfigKey
+          commands:
+            config:
+              env:
+                NEW: "/usr/local/squid/etc/squid.conf"
+                OLD: "/etc/squid/squid.conf"
+              test: "test ! -e \"$NEW\""
+              command: "cp -f \"$NEW\" \"$OLD\""
     Properties:
       BlockDeviceMappings:
         - DeviceName: "/dev/xvda"
           Ebs:
             VolumeSize: !Ref ClusterRootDiskSize
             VolumeType: gp2
-      IamInstanceProfile: !Ref ClusterInstanceProfileArn
+      IamInstanceProfile:
+        Fn::Join:
+          - ""
+          - - "arn:aws:iam::"
+            - !Ref AWS::AccountId
+            - ":instance-profile/"
+            - !Ref ClusterRoleName
       ImageId: !FindInMap
         - AwsLinuxImageId
         - !Ref AWS::Region
@@ -133,40 +211,21 @@ Resources:
             - "\n"
             - - "#!/bin/bash"
               - yum update -y
-              - yum install -y squid
-              # Squid config, optional
-              - Fn::If:
-                - EmptySquidConfig
-                - ""
-                - Fn::Join:
-                  - " && "
-                  - - mkdir -p /usr/local/squid/etc
-                    - cd /usr/local/squid/etc
-                    - !Join ["", [ "aws s3 cp \"", !Ref SquidConfig, "\" ./foreign-config.zip" ]]
-                    - unzip ./foreign-config.zip
-                    # make sure squid fails if config file is missing
-                    - rm -f ./foreign-config.zip
-                    - rm -f /etc/squid/squid.conf
-                    - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
-              - chkconfig squid on
-              # Kinesis firehose agent, optional
-              - Fn::If:
-                - EmptyKfaConfig
-                - ""
-                - Fn::Join:
-                  - "\n"
-                  - - yum install -y aws-kinesis-agent
-                    - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
-                    - chkconfig aws-kinesis-agent on
-                    - service aws-kinesis-agent restart
-              - service squid restart
               - Fn::Join:
                 - " "
-                - - cfn-signal
-                  - -s $?
+                - - /opt/aws/bin/cfn-init --resource ClusterLc
                   - --stack
                   - !Ref AWS::StackName
-                  - --resource ClusterLc
+                  - -c
+                  - !If [ EmptyKfaConfig, squid, squid-kinesis ]
+                  - --region
+                  - !Ref AWS::Region
+              - Fn::Join:
+                - " "
+                - - /opt/aws/bin/cfn-signal --resource ClusterAsg
+                  - -e $?
+                  - --stack
+                  - !Ref AWS::StackName
                   - --region
                   - !Ref AWS::Region
 
