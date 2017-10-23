@@ -44,7 +44,7 @@ Parameters:
     Description: Subnets for Squid cluster, public recommended
   LbSubnets:
     Type: List<AWS::EC2::Subnet::Id>
-    Description: Subnets for LB, usually private
+    Description: Subnets for LB, usually private.
 
 Mappings:
   AwsLinuxImageId:
@@ -78,7 +78,6 @@ Mappings:
       Ec2Hvm64: ami-e689729e
 
 Conditions:
-  # EmptyLbSubnets: !Equals ["", !Join ["", !Ref LbSubnets] ]
   EmptySquidConfig: !Equals ["", !Ref SquidConfig]
   EmptyKfaConfig: !Equals ["", !Ref FirehoseAgentConfig]
 
@@ -112,6 +111,24 @@ Resources:
 
   ClusterLc:
     Type: AWS::AutoScaling::LaunchConfiguration
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          squid-kinesis:
+            - {ConfigSet: squid}
+            - aws-kinesis
+          squid:
+            - squid
+        squid:
+          services:
+            squid:
+              enabled: true
+              ensureRunning: true
+        aws-kinesis:
+          services:
+            aws-kinesis-agent:
+              enabled: true
+              ensureRunning: true
     Properties:
       BlockDeviceMappings:
         - DeviceName: "/dev/xvda"
@@ -148,7 +165,6 @@ Resources:
                     - rm -f ./foreign-config.zip
                     - rm -f /etc/squid/squid.conf
                     - ln -s /usr/local/squid/etc/squid.conf /etc/squid/
-              - chkconfig squid on
               # Kinesis firehose agent, optional
               - Fn::If:
                 - EmptyKfaConfig
@@ -157,16 +173,20 @@ Resources:
                   - "\n"
                   - - yum install -y aws-kinesis-agent
                     - !Join ["", [ "aws s3 cp \"", !Ref FirehoseAgentConfig, "\" /etc/aws-kinesis/agent.json" ]]
-                    - chkconfig aws-kinesis-agent on
-                    - service aws-kinesis-agent restart
-              - service squid restart
               - Fn::Join:
                 - " "
-                - - cfn-signal
-                  - -s $?
+                - - /opt/aws/bin/cfn-init --resource ClusterLc
+                  - -c
+                  - !If [ EmptyKfaConfig, squid, squid-kinesis]
                   - --stack
                   - !Ref AWS::StackName
-                  - --resource ClusterLc
+                  - --region
+                  - !Ref AWS::Region
+              - Fn::Join:
+                - " "
+                - - /opt/aws/bin/cfn-signal -e $? --resource ClusterAsg
+                  - --stack
+                  - !Ref AWS::StackName
                   - --region
                   - !Ref AWS::Region
 
